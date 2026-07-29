@@ -1,0 +1,60 @@
+{
+  "company_name": "NN Services & Engineering Ltd.",
+  "industry": "Premium Real Estate",
+  "introduction": "NN Services & Engineering Ltd. (NNSEL) is a premium real estate company based in Dhaka, Bangladesh, specializing in residential and commercial construction projects.",
+  "contact": {
+    "phone": "+8801540402515",
+    "email": "hr@nnsel.com",
+    "website": "www.nnsel.com",
+    "address": "Dhaka, Bangladesh"
+  },
+  "business_hours": {
+    "saturday_to_thursday": "9:00 AM - 6:00 PM",
+    "friday": "Closed",
+    "timezone": "Asia/Dhaka"
+  },
+  "services": [
+    {
+      "name": "Residential Apartments",
+      "description": "Premium apartment units in various sizes across Dhaka's prime locations."
+    },
+    {
+      "name": "Commercial Spaces",
+      "description": "Office and retail spaces designed for modern businesses."
+    },
+    {
+      "name": "Custom Construction",
+      "description": "Tailored construction projects based on client specifications."
+    }
+  ],
+  "service_locations": [
+    "Dhaka",
+    "Gulshan",
+    "Banani",
+    "Dhanmondi",
+    "Uttara"
+  ],
+  "pricing_policy": "Pricing varies based on location, size, and specifications. Exact pricing is provided after an initial consultation with our sales team. The AI assistant should never quote specific prices and should always direct pricing questions to a human representative.",
+  "faqs": [
+    {
+      "question": "What areas do you operate in?",
+      "answer": "We primarily operate in Dhaka, including Gulshan, Banani, Dhanmondi, and Uttara."
+    },
+    {
+      "question": "Do you offer payment plans?",
+      "answer": "Yes, we offer flexible payment plans. Our sales team can share details based on your specific requirements."
+    },
+    {
+      "question": "How long does construction typically take?",
+      "answer": "Project timelines vary based on scope and scale. A sales representative can provide an estimated timeline for your specific project."
+    }
+  ],
+  "implementation_process": "1. Initial consultation and requirement gathering. 2. Site visit and proposal. 3. Agreement and payment plan finalization. 4. Construction and regular updates. 5. Handover.",
+  "refund_cancellation_policy": "Refund and cancellation terms are outlined in the client agreement and vary by project. Please contact our sales team for specific terms.",
+  "lead_qualification_questions": [
+    "What type of property are you interested in (residential/commercial)?",
+    "Which area or location do you prefer?",
+    "What is your approximate budget range?",
+    "What is your expected timeline?"
+  ]
+}
