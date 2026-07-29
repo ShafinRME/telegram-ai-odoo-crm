@@ -1,0 +1,32 @@
+# Environment secrets
+.env
+*.env
+!.env.example
+
+# n8n
+n8n/credentials-backup/
+n8n_data/
+
+# Odoo
+odoo/filestore/
+odoo_data/
+
+# Postgres
+db/backups/*.sql
+db/backups/*.dump
+postgres_data/
+
+# Ollama
+ollama_data/
+
+# Media (video/screenshots too large for git)
+media/*.mp4
+media/*.mov
+media/*.mkv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (if any n8n custom nodes)
+node_modules/
