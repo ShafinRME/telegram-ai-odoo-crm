@@ -28,5 +28,8 @@ media/*.mkv
 .DS_Store
 Thumbs.db
 
+# Cloudflared binary (downloaded via script, not tracked)
+scripts/cloudflared.exe
+
 # Node (if any n8n custom nodes)
 node_modules/
