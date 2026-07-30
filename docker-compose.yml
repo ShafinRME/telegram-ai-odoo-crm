@@ -51,6 +51,10 @@ services:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}
       TZ: ${GENERIC_TIMEZONE}
+      ODOO_DB_NAME: ${ODOO_DB_NAME}
+      ODOO_AUTOMATION_UID: ${ODOO_AUTOMATION_UID}
+      ODOO_API_KEY: ${ODOO_API_KEY}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/home/node/workflows
