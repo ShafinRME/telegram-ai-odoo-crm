@@ -53,3 +53,14 @@ CREATE TABLE IF NOT EXISTS processed_messages (
 CREATE INDEX IF NOT EXISTS idx_messages_phone ON messages(phone_number);
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations(phone_number);
+
+
+-- Error logging table (Day 4 addition)
+CREATE TABLE IF NOT EXISTS error_logs (
+    id SERIAL PRIMARY KEY,
+    workflow_name VARCHAR(255),
+    node_name VARCHAR(255),
+    error_message TEXT,
+    execution_id VARCHAR(255),
+    occurred_at TIMESTAMPTZ DEFAULT NOW()
+);
