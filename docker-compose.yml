@@ -45,9 +45,6 @@ services:
     container_name: crm_n8n
     restart: unless-stopped
     environment:
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}
       TZ: ${GENERIC_TIMEZONE}
@@ -55,6 +52,7 @@ services:
       ODOO_AUTOMATION_UID: ${ODOO_AUTOMATION_UID}
       ODOO_API_KEY: ${ODOO_API_KEY}
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/home/node/workflows
