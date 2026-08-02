@@ -53,6 +53,8 @@ services:
       ODOO_API_KEY: ${ODOO_API_KEY}
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       WHATSAPP_TOKEN: ${WHATSAPP_TOKEN}
+      WEBHOOK_URL: ${WEBHOOK_URL}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/home/node/workflows

@@ -1,0 +1,990 @@
+{
+  "name": "Telegram AI + Odoo CRM — Main",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\nconst message = body.message;\n\nif (!message) {\n  // Not a message event (could be an edited message, callback query, etc.) - skip\n  return [];\n}\n\nconst senderPhone = message.chat.id.toString(); // keeping field name for downstream compatibility\nconst senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'Unknown';\nconst messageId = message.message_id.toString();\nconst timestamp = message.date;\n\n// Telegram text messages have a `text` field; other types (photo, sticker, voice, etc.) don't\nconst messageType = message.text ? 'text' : (Object.keys(message).find(k => ['photo','sticker','voice','document','video','audio','location'].includes(k)) || 'unknown');\n\n// Only support plain text messages for now - reject other types gracefully\nif (messageType !== 'text') {\n  return [{\n    json: {\n      senderPhone,\n      senderName,\n      messageText: '',\n      messageId,\n      timestamp,\n      unsupportedType: true,\n      messageType\n    }\n  }];\n}\n\nconst rawText = message.text || '';\n\n// Basic payload size guard - avoid extremely long messages overwhelming Ollama\nconst MAX_MESSAGE_LENGTH = 2000;\nif (rawText.length > MAX_MESSAGE_LENGTH) {\n  return [{\n    json: {\n      senderPhone,\n      senderName,\n      messageText: rawText.slice(0, MAX_MESSAGE_LENGTH),\n      messageId,\n      timestamp,\n      unsupportedType: false,\n      messageType,\n      truncated: true\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    senderPhone,\n    senderName,\n    messageText: rawText,\n    messageId,\n    timestamp,\n    unsupportedType: false,\n    messageType\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        176
+      ],
+      "id": "7c74a744-7e65-4443-b8c9-d8c159168c57",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT direction, message_text, created_at\nFROM messages\nWHERE phone_number = '{{ $('Code in JavaScript1').first().json.senderPhone }}'\nORDER BY created_at DESC\nLIMIT 10;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        608,
+        176
+      ],
+      "id": "0b3ead4d-09e0-428f-b32a-d626b749663c",
+      "name": "Execute a SQL query",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "0Pnio4RS9TEIEuVv",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const historyRows = $input.all().map(item => item.json);\nconst currentData = $('Code in JavaScript1').first().json;\n\n// Detect if the current message contains Bangla script (Unicode range U+0980–U+09FF)\nconst banglaRegex = /[\\u0980-\\u09FF]/;\nconst detectedLanguage = banglaRegex.test(currentData.messageText) ? 'BANGLA' : 'ENGLISH';\n\n// Format history oldest-to-newest (Postgres gave us newest-first)\nconst formattedHistory = historyRows\n  .reverse()\n  .map(row => {\n    const role = row.direction === 'inbound' ? 'Customer' : 'Assistant';\n    return `${role}: ${row.message_text}`;\n  })\n  .join('\\n');\n\nconst businessInfo = {\n  \"company_name\": \"NN Services & Engineering Ltd.\",\n  \"industry\": \"Premium Real Estate\",\n  \"introduction\": \"NN Services & Engineering Ltd. (NNSEL) is a premium real estate company based in Dhaka, Bangladesh, specializing in residential and commercial construction projects.\",\n  \"business_hours\": \"Saturday-Thursday 9:00 AM - 6:00 PM, Friday Closed\",\n  \"services\": [\"Residential Apartments\", \"Commercial Spaces\", \"Custom Construction\"],\n  \"service_locations\": [\"Dhaka\", \"Gulshan\", \"Banani\", \"Dhanmondi\", \"Uttara\"],\n  \"pricing_policy\": \"Pricing varies based on location, size, and specifications. Never quote specific prices - always direct to sales team.\",\n  \"faqs\": [\n    { \"q\": \"What areas do you operate in?\", \"a\": \"Dhaka, including Gulshan, Banani, Dhanmondi, and Uttara.\" },\n    { \"q\": \"Do you offer payment plans?\", \"a\": \"Yes, flexible payment plans available - sales team shares details.\" }\n  ]\n};\n\nconst systemPromptTemplate = `You are a professional Telegram customer service assistant for NN Services & Engineering Ltd. (NNSEL), a premium real estate company in Dhaka, Bangladesh.\n\nBUSINESS INFORMATION (only source of truth - never invent anything not stated here):\n${JSON.stringify(businessInfo, null, 2)}\n\nCONVERSATION HISTORY (recent messages with this customer):\n${formattedHistory || 'No previous conversation.'}\n\nCURRENT CUSTOMER MESSAGE:\n${currentData.messageText}\n\nYOUR RULES:\n0. CRITICAL: You are continuing an ongoing conversation. Carefully read the CONVERSATION HISTORY above before replying. Do NOT reintroduce the company or repeat any earlier reply. Directly acknowledge what the customer just said, then ask ONLY the single next missing piece of information (choose from: name, phone, company, product/service interest, requirement, location, budget, timeline, email, preferred contact time). Never repeat a previous message word-for-word or near-word-for-word.\n1. LANGUAGE INSTRUCTION - MANDATORY: The system has detected the CURRENT CUSTOMER MESSAGE is written in ${detectedLanguage}. You MUST write your \"reply\" field in ${detectedLanguage} only, regardless of what language appeared earlier in the conversation history. This is a hard requirement.\n2. Be polite, short, and professional. Ask only one or two questions at a time.\n3. NEVER invent a price, feature, policy, or delivery date. Only use the BUSINESS INFORMATION provided above.\n4. If information is unavailable, tell the customer honestly and offer to connect them with a team member.\n5. Do not ask for information the customer already provided in the conversation history.\n6. Do not request passwords, payment PINs, OTPs, or sensitive financial data.\n7. Collect lead information naturally: name, phone, company, product/service interest, requirement, location, budget, timeline, email, preferred contact time.\n8. Set lead_ready to true when you have AT LEAST: phone number, customer name, product/service interest, and basic requirement.\n9. Also set lead_ready true immediately if customer says \"call me\", \"I need a quotation\", \"I am interested\", \"arrange a meeting\", \"how can I buy\", or similar.\n10. Set human_handoff true if: customer asks for a human, complains, seems angry, asks for final pricing/negotiation, asks legal/payment/contract questions, or you don't know the answer.\n11. When human_handoff is true, stop sales questions, let customer know a team member will contact them.\n\nYOU MUST RESPOND WITH VALID JSON ONLY. NO markdown, no code fences, no extra text. Exactly this structure:\n{\n  \"reply\": \"your message to the customer\",\n  \"lead_ready\": true or false,\n  \"human_handoff\": true or false,\n  \"handoff_reason\": \"reason if human_handoff is true, otherwise empty string\",\n  \"lead_score\": 0 to 100,\n  \"lead\": {\n    \"name\": \"\", \"phone\": \"\", \"email\": \"\", \"company\": \"\", \"product_interest\": \"\",\n    \"requirement\": \"\", \"budget\": \"\", \"timeline\": \"\", \"location\": \"\", \"preferred_contact_time\": \"\", \"notes\": \"\"\n  }\n}\nFill in only lead fields you actually know. Leave unknown fields as empty strings.`;\n\nreturn [{\n  json: {\n    senderPhone: currentData.senderPhone,\n    senderName: currentData.senderName,\n    messageText: currentData.messageText,\n    prompt: systemPromptTemplate\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        176
+      ],
+      "id": "573240ea-2899-43ee-b0ab-9407578ef646",
+      "name": "Code in JavaScript2",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gemma3:4b\",\n  \"format\": \"json\",\n  \"prompt\": {{ JSON.stringify($json.prompt) }},\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1024,
+        176
+      ],
+      "id": "58777a08-0773-4b92-90bb-bc5c8286dfa9",
+      "name": "HTTP Request1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ollamaOutput = $input.first().json;\nconst currentData = $('Code in JavaScript1').first().json;\n\nlet aiResponse;\nlet parseError = null;\n\ntry {\n  aiResponse = JSON.parse(ollamaOutput.response);\n} catch (e) {\n  parseError = e.message;\n}\n\n// Validate the parsed response has the fields we expect\nfunction isValid(obj) {\n  if (!obj || typeof obj !== 'object') return false;\n  if (typeof obj.reply !== 'string') return false;\n  if (typeof obj.lead_ready !== 'boolean') return false;\n  if (typeof obj.human_handoff !== 'boolean') return false;\n  if (!obj.lead || typeof obj.lead !== 'object') return false;\n  return true;\n}\n\nconst valid = !parseError && isValid(aiResponse);\n\n// Force lead_ready true on high-intent trigger phrases, regardless of what the model returned\nconst triggerPhrases = ['call me', 'quotation', 'i am interested', \"i'm interested\", 'arrange a meeting', 'how can i buy', 'speak to a', 'talk to a'];\nconst messageLower = currentData.messageText.toLowerCase();\nconst forcedLeadReady = triggerPhrases.some(phrase => messageLower.includes(phrase));\n\nreturn [{\n  json: {\n    senderPhone: currentData.senderPhone,\n    senderName: currentData.senderName,\n    messageText: currentData.messageText,\n    valid: valid,\n    parseError: parseError,\n    aiReply: valid ? aiResponse.reply : null,\n    leadReady: valid ? (aiResponse.lead_ready || forcedLeadReady) : forcedLeadReady,\n    humanHandoff: valid ? aiResponse.human_handoff : false,\n    handoffReason: valid ? aiResponse.handoff_reason : '',\n    leadScore: valid ? aiResponse.lead_score : 0,\n    lead: valid ? aiResponse.lead : {}\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        176
+      ],
+      "id": "0b7554bd-6929-414d-a065-0411c46194f6",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2cc3ecf6-a30b-4028-aefc-5e5fa68f07c3",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1360,
+        176
+      ],
+      "id": "3f86a506-b0ac-40ef-831d-65ec8a28b103",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ollamaOutput = $input.first().json;\nconst currentData = $('Code in JavaScript1').first().json;\n\nlet aiResponse;\nlet parseError = null;\n\ntry {\n  aiResponse = JSON.parse(ollamaOutput.response);\n} catch (e) {\n  parseError = e.message;\n}\n\n// Validate the parsed response has the fields we expect\nfunction isValid(obj) {\n  if (!obj || typeof obj !== 'object') return false;\n  if (typeof obj.reply !== 'string') return false;\n  if (typeof obj.lead_ready !== 'boolean') return false;\n  if (typeof obj.human_handoff !== 'boolean') return false;\n  if (!obj.lead || typeof obj.lead !== 'object') return false;\n  return true;\n}\n\nconst valid = !parseError && isValid(aiResponse);\n\n// Force lead_ready true on high-intent trigger phrases, regardless of what the model returned\nconst triggerPhrases = ['call me', 'quotation', 'i am interested', \"i'm interested\", 'arrange a meeting', 'how can i buy', 'speak to a', 'talk to a'];\nconst messageLower = currentData.messageText.toLowerCase();\nconst forcedLeadReady = triggerPhrases.some(phrase => messageLower.includes(phrase));\n\nreturn [{\n  json: {\n    senderPhone: currentData.senderPhone,\n    senderName: currentData.senderName,\n    messageText: currentData.messageText,\n    valid: valid,\n    parseError: parseError,\n    aiReply: valid ? aiResponse.reply : null,\n    leadReady: valid ? (aiResponse.lead_ready || forcedLeadReady) : forcedLeadReady,\n    humanHandoff: valid ? aiResponse.human_handoff : false,\n    handoffReason: valid ? aiResponse.handoff_reason : '',\n    leadScore: valid ? aiResponse.lead_score : 0,\n    lead: valid ? aiResponse.lead : {}\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        512
+      ],
+      "id": "7572e6b3-fc32-4b98-af78-94ab2e2f985d",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2c3c384b-e73f-4ea3-a7b7-ac4e597fe041",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1248,
+        512
+      ],
+      "id": "578e0ac0-b611-4d59-826d-3b83c9e01e05",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    senderPhone: $('Code in JavaScript1').first().json.senderPhone,\n    senderName: $('Code in JavaScript1').first().json.senderName,\n    messageText: $('Code in JavaScript1').first().json.messageText,\n    valid: true,\n    aiReply: \"Thank you for your message. We are having a temporary technical issue. A team member will review your request.\",\n    leadReady: false,\n    humanHandoff: true,\n    handoffReason: \"AI response validation failed after retry\",\n    leadScore: 0,\n    lead: {}\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        592
+      ],
+      "id": "65806a21-d208-4fbc-808d-bdf6fd1e33a1",
+      "name": "Code in JavaScript5"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gemma3:4b\",\n  \"format\": \"json\",\n  \"prompt\": \"{{ $('Code in JavaScript2').first().json.prompt }}\",\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        896,
+        512
+      ],
+      "id": "dc3a60c3-feb5-490d-bf7a-8382f7c38034",
+      "name": "HTTP Request2",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (whatsapp_message_id, phone_number, direction, message_text, message_type)\nVALUES \n  ('{{ $('Code in JavaScript1').first().json.messageId }}', '{{ $('Code in JavaScript1').first().json.senderPhone }}', 'inbound', '{{ $('Code in JavaScript1').first().json.messageText.replace(/'/g, \"''\") }}', 'text'),\n  (gen_random_uuid()::text, '{{ $('Code in JavaScript1').first().json.senderPhone }}', 'outbound', '{{ ($('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.aiReply : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.aiReply : $('Code in JavaScript5').first().json.aiReply)).replace(/'/g, \"''\") }}', 'text');",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1664,
+        272
+      ],
+      "id": "5f7ff0a3-9f4b-4e5a-85d9-0b45d19be0eb",
+      "name": "Execute a SQL query1",
+      "credentials": {
+        "postgres": {
+          "id": "0Pnio4RS9TEIEuVv",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5ab169e6-ee29-4e9a-a0be-148f936c42e8",
+              "leftValue": "={{ $('Code in JavaScript3').first().json.valid ? ($('Code in JavaScript3').first().json.leadReady || $('Code in JavaScript3').first().json.humanHandoff) : ($('Code in JavaScript4').first().json.valid ? ($('Code in JavaScript4').first().json.leadReady || $('Code in JavaScript4').first().json.humanHandoff) : ($('Code in JavaScript5').first().json.leadReady || $('Code in JavaScript5').first().json.humanHandoff)) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2016,
+        512
+      ],
+      "id": "c0db6f1e-6aa9-43fa-9c21-cd85e2499ab5",
+      "name": "Check Lead Ready or Handoff"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://odoo:8069/jsonrpc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [$env.ODOO_DB_NAME, 6, $env.ODOO_API_KEY, \"crm.lead\", \"search_read\", [[[\"x_telegram_chat_id\", \"=\", $('Code in JavaScript1').first().json.senderPhone]]], {\"fields\": [\"id\"], \"limit\": 1, \"order\": \"id desc\"}]\n  }\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2208,
+        496
+      ],
+      "id": "80cd3576-7880-4f6a-a71c-082e6f57fafe",
+      "name": "Search Odoo Lead"
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchResult = $input.first().json.result;\nconst leadFound = searchResult && searchResult.length > 0;\nreturn [{\n  json: {\n    leadFound: leadFound,\n    existingLeadId: leadFound ? searchResult[0].id : null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        496
+      ],
+      "id": "384960ce-1707-4bb5-bfdd-4ed8084587de",
+      "name": "Extract Lead Match"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "de6e4ed3-3b53-4d73-a761-bba3029b034d",
+              "leftValue": "={{ $json.leadFound }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2560,
+        496
+      ],
+      "id": "829f3dbd-5398-4c18-b1a1-3034b26b2a08",
+      "name": "Lead Found"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://odoo:8069/jsonrpc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [$env.ODOO_DB_NAME, 6, $env.ODOO_API_KEY, \"crm.lead\", \"write\", [[$json.existingLeadId], {\n      \"contact_name\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.name : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.name : $('Code in JavaScript5').first().json.lead.name),\n      \"email_from\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.email : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.email : $('Code in JavaScript5').first().json.lead.email),\n      \"partner_name\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.company : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.company : $('Code in JavaScript5').first().json.lead.company),\n      \"x_product_interest\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.product_interest : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.product_interest : $('Code in JavaScript5').first().json.lead.product_interest),\n      \"x_customer_requirement\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.requirement : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.requirement : $('Code in JavaScript5').first().json.lead.requirement),\n      \"x_customer_budget\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.budget : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.budget : $('Code in JavaScript5').first().json.lead.budget),\n      \"x_required_timeline\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.timeline : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.timeline : $('Code in JavaScript5').first().json.lead.timeline),\n      \"x_customer_location\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.location : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.location : $('Code in JavaScript5').first().json.lead.location),\n      \"x_preferred_contact_time\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.preferred_contact_time : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.preferred_contact_time : $('Code in JavaScript5').first().json.lead.preferred_contact_time),\n      \"x_ai_lead_score\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.leadScore : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.leadScore : $('Code in JavaScript5').first().json.leadScore),\n      \"x_ai_summary\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.notes : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.notes : $('Code in JavaScript5').first().json.lead.notes),\n      \"x_handoff_reason\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.handoffReason : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.handoffReason : $('Code in JavaScript5').first().json.handoffReason),\n      \"x_last_message_time\": $now.toFormat('yyyy-MM-dd HH:mm:ss')\n    }]]\n  }\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2736,
+        416
+      ],
+      "id": "49798cc3-4222-4d09-ad91-af01f7014efd",
+      "name": "Update Lead"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://odoo:8069/jsonrpc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [$env.ODOO_DB_NAME, 6, $env.ODOO_API_KEY, \"crm.lead\", \"create\", [{\n      \"name\": \"Telegram Lead - \" + ($('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.name : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.name : $('Code in JavaScript5').first().json.lead.name)) + \" - \" + ($('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.product_interest : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.product_interest : $('Code in JavaScript5').first().json.lead.product_interest)),\n      \"contact_name\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.name : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.name : $('Code in JavaScript5').first().json.lead.name),\n      \"phone\": $('Code in JavaScript1').first().json.senderPhone,\n      \"email_from\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.email : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.email : $('Code in JavaScript5').first().json.lead.email),\n      \"partner_name\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.company : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.company : $('Code in JavaScript5').first().json.lead.company),\n      \"description\": \"Source: Telegram AI Assistant\",\n      \"user_id\": 2,\n      \"priority\": \"1\",\n      \"x_telegram_chat_id\": $('Code in JavaScript1').first().json.senderPhone,\n      \"x_telegram_message_id\": $('Code in JavaScript1').first().json.messageId,\n      \"x_product_interest\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.product_interest : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.product_interest : $('Code in JavaScript5').first().json.lead.product_interest),\n      \"x_customer_requirement\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.requirement : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.requirement : $('Code in JavaScript5').first().json.lead.requirement),\n      \"x_customer_budget\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.budget : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.budget : $('Code in JavaScript5').first().json.lead.budget),\n      \"x_required_timeline\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.timeline : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.timeline : $('Code in JavaScript5').first().json.lead.timeline),\n      \"x_customer_location\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.location : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.location : $('Code in JavaScript5').first().json.lead.location),\n      \"x_preferred_contact_time\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.preferred_contact_time : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.preferred_contact_time : $('Code in JavaScript5').first().json.lead.preferred_contact_time),\n      \"x_ai_lead_score\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.leadScore : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.leadScore : $('Code in JavaScript5').first().json.leadScore),\n      \"x_ai_summary\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.lead.notes : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.lead.notes : $('Code in JavaScript5').first().json.lead.notes),\n      \"x_handoff_reason\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.handoffReason : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.handoffReason : $('Code in JavaScript5').first().json.handoffReason),\n      \"x_last_message_time\": $now.toFormat('yyyy-MM-dd HH:mm:ss')\n    }]]\n  }\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2736,
+        560
+      ],
+      "id": "7c4ac255-b7cd-4690-aff5-07a89f941237",
+      "name": "Create Lead",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = $input.first().json.result;\nlet leadId;\nif (typeof output === 'number') {\n  leadId = output; // came from Create Lead\n} else {\n  leadId = $('Extract Lead Match').first().json.existingLeadId; // came from Update Lead\n}\nreturn [{ json: { leadId: leadId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        480
+      ],
+      "id": "527006c3-4426-4574-951d-7ffda6f5931e",
+      "name": "Resolve Lead ID"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://odoo:8069/jsonrpc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"service\": \"object\",\n    \"method\": \"execute_kw\",\n    \"args\": [$env.ODOO_DB_NAME, 6, $env.ODOO_API_KEY, \"mail.activity\", \"create\", [{\n      \"res_model_id\": 401,\n      \"res_model\": \"crm.lead\",\n      \"res_id\": $('Create Lead').isExecuted ? $('Create Lead').first().json.result : $('Extract Lead Match').first().json.existingLeadId,\n      \"activity_type_id\": 2,\n      \"summary\": \"Follow up on Telegram lead\",\n      \"note\": $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.aiReply : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.aiReply : $('Code in JavaScript5').first().json.aiReply),\n      \"user_id\": 2,\n      \"date_deadline\": $now.plus({days: 1}).toFormat('yyyy-MM-dd')\n    }]]\n  }\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2880,
+        688
+      ],
+      "id": "db2153e1-0890-433a-98a1-ba8865292cb6",
+      "name": "Create Follow-up Activity"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as cnt FROM processed_messages WHERE whatsapp_message_id = '{{ $('Code in JavaScript1').first().json.messageId }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        304,
+        432
+      ],
+      "id": "03485aa8-a83e-4730-8679-bf58ead31182",
+      "name": "Check Duplicate",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "0Pnio4RS9TEIEuVv",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bf71a407-9e99-4305-bfc6-974976d47be8",
+              "leftValue": "={{ $json.cnt }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        464,
+        432
+      ],
+      "id": "6a827504-ccc9-49b5-ae42-26a8dd843a3e",
+      "name": "Is Duplicate"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_messages (whatsapp_message_id, processed_at)\nVALUES ('{{ $('Code in JavaScript1').first().json.messageId }}', NOW())\nON CONFLICT (whatsapp_message_id) DO NOTHING",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2400,
+        912
+      ],
+      "id": "439de51a-c4a7-481a-8db0-41faeef13e42",
+      "name": "Mark as Processed",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "0Pnio4RS9TEIEuVv",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO contacts (phone_number, customer_name, updated_at)\nVALUES (\n  '{{ $json.senderPhone }}',\n  '{{ $json.senderName }}',\n  NOW()\n)\nON CONFLICT (phone_number) DO UPDATE SET\n  customer_name = EXCLUDED.customer_name,\n  updated_at = NOW();\n\nSELECT phone_number, ai_enabled, human_handoff \nFROM contacts \nWHERE phone_number = '{{ $json.senderPhone }}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        48,
+        400
+      ],
+      "id": "79c0b297-62b8-4e53-8ce8-5b9f7fc1ca2d",
+      "name": "Upsert Contact",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "0Pnio4RS9TEIEuVv",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "475e8558-8ed4-4e09-b7fe-287d6345ee18",
+              "leftValue": "={{ $json.ai_enabled }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "29161189-cd5b-491c-9301-78ee35bc3660",
+              "leftValue": "={{ $json.human_handoff }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "2910988c-0a22-4f9b-bfd3-6c4ee347683e",
+              "leftValue": "={{ $('Code in JavaScript1').first().json.unsupportedType }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        48,
+        624
+      ],
+      "id": "0e6522e6-067b-485a-9ec9-2687c22c230e",
+      "name": "Check AI Status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE contacts \nSET human_handoff = {{ $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.humanHandoff : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.humanHandoff : $('Code in JavaScript5').first().json.humanHandoff) }},\n    updated_at = NOW()\nWHERE phone_number = '{{ $('Code in JavaScript1').first().json.senderPhone }}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        3088,
+        688
+      ],
+      "id": "36550fbb-4aad-4b22-8124-597266417d63",
+      "name": "Update Contact Handoff Flag",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "0Pnio4RS9TEIEuVv",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        48,
+        176
+      ],
+      "id": "d6482882-bd68-4a77-b934-b5030ed8fd72",
+      "name": "Telegram Trigger",
+      "webhookId": "cc88515d-2ff6-481f-b1f0-5206aefac26d",
+      "credentials": {
+        "telegramApi": {
+          "id": "1rIWsMhGXBE9cF0w",
+          "name": "Telegram - NNSEL Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Code in JavaScript1').first().json.senderPhone }}",
+        "text": "={{ $('Code in JavaScript3').first().json.valid ? $('Code in JavaScript3').first().json.aiReply : ($('Code in JavaScript4').first().json.valid ? $('Code in JavaScript4').first().json.aiReply : $('Code in JavaScript5').first().json.aiReply) }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1904,
+        272
+      ],
+      "id": "218817ae-ec6b-4ba7-9687-9a705842acd9",
+      "name": "Send a text message",
+      "webhookId": "1a82c3ee-3b68-441f-8d1f-82a03ff8c891",
+      "credentials": {
+        "telegramApi": {
+          "id": "1rIWsMhGXBE9cF0w",
+          "name": "Telegram - NNSEL Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Code in JavaScript1').first().json.senderPhone }}",
+        "text": "Thank you. I have shared your request with our team. A representative will contact you as soon as possible.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        48,
+        848
+      ],
+      "id": "b2786544-77bc-42db-bcad-94b5b0cb7e2d",
+      "name": "Send a text message1",
+      "webhookId": "05400008-be95-400e-aef8-59cdbe1f9b1d",
+      "credentials": {
+        "telegramApi": {
+          "id": "1rIWsMhGXBE9cF0w",
+          "name": "Telegram - NNSEL Bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Upsert Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript5": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query1": {
+      "main": [
+        [
+          {
+            "node": "Check Lead Ready or Handoff",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Lead Ready or Handoff": {
+      "main": [
+        [
+          {
+            "node": "Search Odoo Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Odoo Lead": {
+      "main": [
+        [
+          {
+            "node": "Extract Lead Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Lead Match": {
+      "main": [
+        [
+          {
+            "node": "Lead Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Found": {
+      "main": [
+        [
+          {
+            "node": "Update Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead": {
+      "main": [
+        [
+          {
+            "node": "Resolve Lead ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Resolve Lead ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Lead ID": {
+      "main": [
+        [
+          {
+            "node": "Create Follow-up Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Create Follow-up Activity": {
+      "main": [
+        [
+          {
+            "node": "Update Contact Handoff Flag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Contact": {
+      "main": [
+        [
+          {
+            "node": "Check AI Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check AI Status": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Contact Handoff Flag": {
+      "main": [
+        [
+          {
+            "node": "Mark as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Check Lead Ready or Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message1": {
+      "main": [
+        [
+          {
+            "node": "Mark as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "t43p2UCIKFcjuKMV",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "e4dce2eb-7990-46a9-ae62-ad4bacfb2b46",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8c8fd756cba51a22f295317c6b8d9753648318d454b68fef53b3a3b88a4f5acc"
+  },
+  "nodeGroups": [],
+  "id": "3hN1aj9p57akqDd0",
+  "tags": []
+}
